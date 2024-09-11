@@ -1,6 +1,6 @@
 from typing import Dict, Any, Union, Callable, List, Set
 
-from django.db.models import Prefetch
+from django.db.models import Prefetch, QuerySet
 
 from oscar.core.loading import get_class
 
@@ -14,9 +14,9 @@ SelectRelatedType = Union[str, List[str]]
 
 class PrefetchRegistry:
     """
-    This class enables the flexibility to register prefetch_related and select_related operations
+    This base class enables the flexibility to register prefetch_related and select_related operations
     for the product_queryset_to_resources method. By default, django-oscar-odin prefetches all related
-    fields that are used by the default mapping.
+    fields that are used by the default mapping in the default_registry (oscar_odin.mappings.prefetching.default_registry).
 
     However, it's likely that you have your own resource(s) that makes use of the product_queryset_to_resources
     method while doing additional queries. To make it easier to add your own prefetches, to prevent n+1 queries
@@ -31,6 +31,31 @@ class PrefetchRegistry:
         self.prefetches: Dict[str, PrefetchType] = {}
         self.children_prefetches: Dict[str, PrefetchType] = {}
         self.select_related: Set[str] = set()
+
+        self.register()
+
+    def register(self):
+        raise NotImplementedError("You need to implement this method in your subclass.")
+
+    def _apply(self, queryset: QuerySet, prefetch: PrefetchType, **kwargs):
+        if isinstance(prefetch, (str, Prefetch)):
+            queryset = queryset.prefetch_related(prefetch)
+        elif callable(prefetch):
+            queryset = prefetch(queryset, **kwargs)
+        return queryset
+
+    def apply(self, queryset: QuerySet, **kwargs):
+        select_related_fields = self.get_select_related()
+        queryset = queryset.select_related(*select_related_fields)
+
+        for prefetch in self.get_prefetches().values():
+            queryset = self._apply(queryset, prefetch, **kwargs)
+
+        if kwargs.get("include_children", False):
+            for prefetch in self.get_children_prefetches().values():
+                queryset = self._apply(queryset, prefetch, **kwargs)
+
+        return queryset
 
     def register_prefetch(self, prefetch: PrefetchType):
         """
@@ -138,6 +163,3 @@ class PrefetchRegistry:
             return operation.__name__
         else:
             raise ValueError(f"Unsupported operation type: {type(operation)}")
-
-
-prefetch_registry = PrefetchRegistry()
